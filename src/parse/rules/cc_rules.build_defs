@@ -15,6 +15,77 @@ _WHOLE_ARCHIVE = '-all_load' if CONFIG.OS == 'darwin' else '--whole-archive'
 _NO_WHOLE_ARCHIVE = '-noall_load' if CONFIG.OS == 'darwin' else '--no-whole-archive'
 
 
+def cc_precompiled_header(name, hdr, private_hdrs=None, deps=None, visibility=None, test_only=False,
+               compiler_flags=None, linker_flags=None, pkg_config_libs=None, includes=None, defines=None,
+               _c=False):
+    """Generate a C or C++ precompiled header target (only for GCC).
+
+    Args:
+      name (str): Name of the rule
+      hdr (str): C or C++ header file to compile.
+      private_hdrs (list): Header files that are available only to this rule and not exported to
+                           dependent rules.
+      deps (list): Dependent rules.
+      visibility (list): Visibility declaration for this rule.
+      test_only (bool): If True, is only available to other test rules.
+      compiler_flags (list): Flags to pass to the compiler.
+      linker_flags (list): Flags to pass to the linker; these will not be used here but will be
+                           picked up by a cc_binary or cc_test rule.
+      pkg_config_libs (list): Libraries to declare a dependency on using pkg-config. Again, the ldflags
+                              will be picked up by cc_binary or cc_test rules.
+      includes (list): List of include directories to be added to the compiler's path.
+      defines (list | dict): List of tokens to define in the preprocessor.
+                             Alternatively can be a dict of name -> value to define, in which case
+                             values are surrounded by quotes.
+    """
+    private_hdrs = private_hdrs or []
+    deps = deps or []
+    compiler_flags = compiler_flags or []
+    linker_flags = linker_flags or []
+    pkg_config_libs = pkg_config_libs or []
+    includes = includes or []
+    defines = defines or []
+
+    # Handle defines being passed as a dict, as a nicety for the user.
+    if isinstance(defines, dict):
+        defines = [k if v is None else r'%s=\"%s\"' % (k, v) for k, v in sorted(defines.items())]
+
+    labels = (['cc:ld:' + flag for flag in linker_flags] +
+              ['cc:pc:' + lib for lib in pkg_config_libs] +
+              ['cc:inc:%s/%s' % (get_base_path(), include) for include in includes] +
+              ['cc:def:' + define for define in defines])
+
+    cmds, tools = _library_cmds(_c, compiler_flags, pkg_config_libs, extra_flags='-o ${OUT}', archive=False)
+
+    # Single source file, optimise slightly by not extracting & remerging the archive.
+    gch_rule = build_rule(
+        name=name,
+        tag='cc',
+        srcs={'srcs': [hdr], 'priv': private_hdrs},
+        outs=['%s.gch' % hdr],
+        deps=deps,
+        cmd=cmds,
+        building_description='Compiling...',
+        requires=['cc_hdrs'],
+        test_only=test_only,
+        labels=labels,
+        tools=tools,
+        pre_build=_library_transitive_labels(_c, compiler_flags, pkg_config_libs) if (deps or includes or defines) else None,
+        needs_transitive_deps=True,
+    )
+
+    return filegroup(
+        name=name,
+        srcs=[gch_rule],
+        provides={
+            'cc_hdrs': gch_rule,
+        },
+        test_only=test_only,
+        visibility=visibility,
+        output_is_complete=False,
+    )
+
+
 def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, deps=None, visibility=None, test_only=False,
                compiler_flags=None, linker_flags=None, pkg_config_libs=None, includes=None, defines=None,
                alwayslink=False, _c=False):
@@ -828,6 +899,9 @@ def _binary_transitive_labels(c, linker_flags, pkg_config_libs, shared=False):
 # C rules. These call straight through to the c++ versions and just set a flag.
 def c_library(**kwargs):
     return cc_library(_c=True, **kwargs)
+
+def c_precompiled_header(**kwargs):
+    cc_precompiled_header(_c=True, **kwargs)
 
 def c_object(**kwargs):
     return cc_object(_c=True, **kwargs)
