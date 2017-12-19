@@ -15,16 +15,16 @@ _WHOLE_ARCHIVE = '-all_load' if CONFIG.OS == 'darwin' else '--whole-archive'
 _NO_WHOLE_ARCHIVE = '-noall_load' if CONFIG.OS == 'darwin' else '--no-whole-archive'
 
 
-def cc_precompiled_header(name, hdr, private_hdrs=None, deps=None, visibility=None, test_only=False,
+def cc_precompiled_header(name, src, hdrs=None, deps=None, visibility=None, test_only=False,
                compiler_flags=None, linker_flags=None, pkg_config_libs=None, includes=None, defines=None,
                _c=False):
     """Generate a C or C++ precompiled header target (only for GCC).
 
     Args:
       name (str): Name of the rule
-      hdr (str): C or C++ header file to compile.
-      private_hdrs (list): Header files that are available only to this rule and not exported to
-                           dependent rules.
+      src (str): C or C++ header file to compile.
+      hdrs (list): Header files. These will be made available to dependent rules, so the distinction
+                   between srcs and hdrs is important.
       deps (list): Dependent rules.
       visibility (list): Visibility declaration for this rule.
       test_only (bool): If True, is only available to other test rules.
@@ -38,7 +38,7 @@ def cc_precompiled_header(name, hdr, private_hdrs=None, deps=None, visibility=No
                              Alternatively can be a dict of name -> value to define, in which case
                              values are surrounded by quotes.
     """
-    private_hdrs = private_hdrs or []
+    hdrs = hdrs or []
     deps = deps or []
     compiler_flags = compiler_flags or []
     linker_flags = linker_flags or []
@@ -61,8 +61,8 @@ def cc_precompiled_header(name, hdr, private_hdrs=None, deps=None, visibility=No
     gch_rule = build_rule(
         name=name,
         tag='cc',
-        srcs={'srcs': [hdr], 'priv': private_hdrs},
-        outs=['%s.gch' % hdr],
+        srcs={'srcs': [src], 'hdrs': hdrs},
+        outs=['%s.gch' % src],
         deps=deps,
         cmd=cmds,
         building_description='Compiling...',
@@ -86,9 +86,9 @@ def cc_precompiled_header(name, hdr, private_hdrs=None, deps=None, visibility=No
     )
 
 
-def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, deps=None, visibility=None, test_only=False,
-               compiler_flags=None, linker_flags=None, pkg_config_libs=None, includes=None, defines=None,
-               alwayslink=False, _c=False):
+def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, precompiled_hdr=None, deps=None, visibility=None,
+               test_only=False, compiler_flags=None, linker_flags=None, pkg_config_libs=None, includes=None,
+               defines=None, alwayslink=False, _c=False):
     """Generate a C or C++ library target.
 
     Args:
@@ -98,6 +98,7 @@ def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, deps=None, visibil
                    between srcs and hdrs is important.
       private_hdrs (list): Header files that are available only to this rule and not exported to
                            dependent rules.
+      precompiled_hdr (str): Precompiled header using cc_precompiled_header (GCC only).
       deps (list): Dependent rules.
       visibility (list): Visibility declaration for this rule.
       test_only (bool): If True, is only available to other test rules.
@@ -116,6 +117,7 @@ def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, deps=None, visibil
     """
     srcs = srcs or []
     hdrs = hdrs or []
+    private_hdrs = private_hdrs or []
     deps = deps or []
     compiler_flags = compiler_flags or []
     linker_flags = linker_flags or []
@@ -168,6 +170,17 @@ def cc_library(name, srcs=None, hdrs=None, private_hdrs=None, deps=None, visibil
         labels=labels,
         output_is_complete=False,
     )
+
+    if precompiled_hdr:
+        pch_rule = cc_precompiled_header(
+            name = '_%s#pch' % name,
+            src = precompiled_hdr,
+            hdrs = hdrs + private_hdrs,
+            compiler_flags=compiler_flags,
+            pkg_config_libs=pkg_config_libs,
+            _c=_c,
+        )
+        private_hdrs.append(pch_rule)
 
     cmds, tools = _library_cmds(_c, compiler_flags, pkg_config_libs)
     if len(srcs) > 1:
@@ -338,8 +351,9 @@ def cc_object(name, src, hdrs=None, private_hdrs=None, out=None, test_only=False
     )
 
 
-def cc_static_library(name, srcs=None, hdrs=None, compiler_flags=None, linker_flags=None,
-                      deps=None, visibility=None, test_only=False, pkg_config_libs=None, _c=False):
+def cc_static_library(name, srcs=None, hdrs=None, precompiled_hdr=None, compiler_flags=None,
+                      linker_flags=None, deps=None, visibility=None, test_only=False, pkg_config_libs=None,
+                      _c=False):
     """Generates a C++ static library (.a).
 
     This is essentially just a collection of other cc_library rules into a single archive.
@@ -350,6 +364,7 @@ def cc_static_library(name, srcs=None, hdrs=None, compiler_flags=None, linker_fl
       name (str): Name of the rule
       srcs (list): C or C++ source files to compile.
       hdrs (list): Header files.
+      precompiled_hdr (str): Precompiled header using cc_precompiled_header (GCC only).
       compiler_flags (list): Flags to pass to the compiler.
       linker_flags (list): Flags to pass to the linker.
       deps (list): Dependent rules.
@@ -364,6 +379,7 @@ def cc_static_library(name, srcs=None, hdrs=None, compiler_flags=None, linker_fl
             name = '_%s#lib' % name,
             srcs = srcs,
             hdrs = hdrs,
+            precompiled_hdr = precompiled_hdr,
             compiler_flags = compiler_flags,
             linker_flags = linker_flags,
             deps = deps,
@@ -396,9 +412,9 @@ def cc_static_library(name, srcs=None, hdrs=None, compiler_flags=None, linker_fl
     )
 
 
-def cc_shared_object(name, srcs=None, hdrs=None, out='', compiler_flags=None, linker_flags=None,
-                     deps=None, visibility=None, test_only=False, pkg_config_libs=None,
-                     includes=None, _c=False):
+def cc_shared_object(name, srcs=None, hdrs=None, precompiled_hdr=None, out='', compiler_flags=None,
+                     linker_flags=None, deps=None, visibility=None, test_only=False,
+                     pkg_config_libs=None, includes=None, _c=False):
     """Generates a C++ shared object with its dependencies linked in.
 
     Args:
@@ -406,6 +422,7 @@ def cc_shared_object(name, srcs=None, hdrs=None, out='', compiler_flags=None, li
       srcs (list): C or C++ source files to compile.
       hdrs (list): Header files. These will be made available to dependent rules, so the distinction
                    between srcs and hdrs is important.
+      precompiled_hdr (str): Precompiled header using cc_precompiled_header (GCC only).
       out (str): Name of the output .so. Defaults to name + .so.
       compiler_flags (list): Flags to pass to the compiler.
       linker_flags (list): Flags to pass to the linker.
@@ -425,6 +442,7 @@ def cc_shared_object(name, srcs=None, hdrs=None, out='', compiler_flags=None, li
             name = '_%s#lib' % name,
             srcs = srcs,
             hdrs = hdrs,
+            precompiled_hdr = precompiled_hdr,
             compiler_flags = compiler_flags,
             linker_flags = linker_flags,
             deps = deps,
@@ -459,8 +477,9 @@ def cc_shared_object(name, srcs=None, hdrs=None, out='', compiler_flags=None, li
     )
 
 
-def cc_binary(name, srcs=None, hdrs=None, private_hdrs=None, compiler_flags=None, linker_flags=None,
-              deps=None, visibility=None, pkg_config_libs=None, test_only=False, static=False, _c=False):
+def cc_binary(name, srcs=None, hdrs=None, private_hdrs=None, precompiled_hdr=None, compiler_flags=None,
+              linker_flags=None, deps=None, visibility=None, pkg_config_libs=None, test_only=False, static=False,
+              _c=False):
     """Builds a binary from a collection of C++ rules.
 
     Args:
@@ -469,6 +488,7 @@ def cc_binary(name, srcs=None, hdrs=None, private_hdrs=None, compiler_flags=None
       hdrs (list): Header files.
       private_hdrs (list): Header files that are available only to this rule and not exported to
                            dependent rules.
+      precompiled_hdr (str): Precompiled header using cc_precompiled_header (GCC only).
       compiler_flags (list): Flags to pass to the compiler.
       linker_flags (list): Flags to pass to the linker.
       deps (list): Dependent rules.
@@ -492,6 +512,7 @@ def cc_binary(name, srcs=None, hdrs=None, private_hdrs=None, compiler_flags=None
             srcs=srcs,
             hdrs=hdrs,
             private_hdrs=private_hdrs,
+            precompiled_hdr=precompiled_hdr,
             deps=deps,
             pkg_config_libs=pkg_config_libs,
             compiler_flags=compiler_flags,
@@ -517,9 +538,9 @@ def cc_binary(name, srcs=None, hdrs=None, private_hdrs=None, compiler_flags=None
     )
 
 
-def cc_test(name, srcs=None, hdrs=None, compiler_flags=None, linker_flags=None, pkg_config_libs=None,
-            deps=None, data=None, visibility=None, flags='', labels=None, flaky=0, test_outputs=None,
-            size=None, timeout=0, container=False, sandbox=None,
+def cc_test(name, srcs=None, hdrs=None, precompiled_hdr=None, compiler_flags=None, linker_flags=None,
+            pkg_config_libs=None, deps=None, data=None, visibility=None, flags='', labels=None, flaky=0,
+            test_outputs=None, size=None, timeout=0, container=False, sandbox=None,
             write_main=not CONFIG.BAZEL_COMPATIBILITY, _c=False):
     """Defines a C++ test using UnitTest++.
 
@@ -530,6 +551,7 @@ def cc_test(name, srcs=None, hdrs=None, compiler_flags=None, linker_flags=None, 
       name (str): Name of the rule
       srcs (list): C or C++ source files to compile.
       hdrs (list): Header files.
+      precompiled_hdr (str): Precompiled header using cc_precompiled_header (GCC only).
       compiler_flags (list): Flags to pass to the compiler.
       linker_flags (list): Flags to pass to the linker.
       pkg_config_libs (list): Libraries to declare a dependency on using pkg-config.
@@ -571,6 +593,7 @@ def cc_test(name, srcs=None, hdrs=None, compiler_flags=None, linker_flags=None, 
             name='_%s#lib' % name,
             srcs=srcs,
             hdrs=hdrs,
+            precompiled_hdr=precompiled_hdr,
             deps=deps,
             pkg_config_libs=pkg_config_libs,
             compiler_flags=compiler_flags,

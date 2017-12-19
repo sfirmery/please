@@ -1,4 +1,4 @@
-#include "all_headers.h"
+#include "precompiled_header_all.h"
 
 char kTemplate[] = "<testsuite errors=\"0\" failures=\"0\"></testsuite>";
 

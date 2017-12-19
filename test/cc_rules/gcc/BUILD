@@ -89,3 +89,11 @@ c_test(
     name = 'c_test',
     srcs = ['test.c'],
 )
+
+# Tests on precompiled header
+c_test(
+    name = 'precompiled_header_test',
+    srcs = ['precompiled_header_test.c'],
+    hdrs = ['precompiled_header_1.h'],
+    precompiled_hdr = 'precompiled_header_all.h',
+)
